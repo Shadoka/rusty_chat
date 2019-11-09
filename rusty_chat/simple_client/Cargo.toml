@@ -8,4 +8,4 @@ edition = "2018"
 
 [dependencies]
 
-server_common = {path = "../common"}
+common = {path = "../common"}

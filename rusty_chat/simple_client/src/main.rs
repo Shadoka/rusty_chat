@@ -1,7 +1,7 @@
 use std::net::{TcpStream, Shutdown};
 use std::io::{Read, Write, BufRead};
 use std::str::from_utf8;
-use server_common;
+use common;
 
 const BUFFER_SIZE: usize = 1024;
 
@@ -12,11 +12,17 @@ struct Input {
 }
 
 fn main() {
-    let test = server_common::LoginRequest{name : String::from("tilmann"), name_length : 7u8};
+    let test = common::LoginRequest{name : String::from("tilmann"), name_length : 7u8};
     let serialized = test.to_bytes();
     match TcpStream::connect("localhost:3333") {
         Ok(mut stream) => {
             println!("connected to port 3333");
+            println!("transmitting name");
+            match stream.write(&serialized){
+                Ok(size) => println!("wrote {} bytes", size),
+                Err(e) => println!("failed to transmit name: {}", e)
+            };
+            println!("name transmitted");
             let mut input = get_user_input();
             while input.read_string != "exit" {
                 stream.write(&*input.user_input).unwrap();

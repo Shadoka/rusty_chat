@@ -1,6 +1,9 @@
 use std::thread;
 use std::net::{TcpListener, TcpStream, Shutdown};
 use std::io::{Read, Write};
+use common::LoginRequest;
+
+extern crate bincode;
 
 fn main() {
     let listener = TcpListener::bind("0.0.0.0:3333").unwrap();
@@ -22,6 +25,29 @@ fn main() {
 }
 
 fn handle_client(mut stream: TcpStream) {
+    // read request - can i get this into a separate function?
+    let mut read_data = vec!(0; LoginRequest::SIZE);
+    let request: Option<LoginRequest> = match stream.read(&mut read_data) {
+        Ok(size) => {
+            if size == 0 {
+                None
+            } else {
+                let request: LoginRequest = bincode::deserialize(&read_data).unwrap();
+                Some(request)
+            }
+        },
+        Err(e) => {
+            println!("error reading the login request from client {}: {}", stream.peer_addr().unwrap(), e);
+            None
+        }
+    };
+
+    // TODO: unsuccessful should probably exit here
+    match request {
+        Some(r) => println!("user {} logged in", r.name),
+        None => println!("unsuccessful login attempt") 
+    };
+
     let mut data = [0 as u8; 1024];
     while match stream.read(&mut data) {
         Ok(size) => {

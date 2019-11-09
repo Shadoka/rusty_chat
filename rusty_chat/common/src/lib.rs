@@ -11,6 +11,9 @@ pub struct LoginRequest {
 }
 
 impl LoginRequest {
+    // TODO: call some kind of validate() either at creation or transmission time
+    pub const SIZE: usize = 256;
+
     pub fn to_bytes(&self) -> Vec<u8>{
         let result: Vec<u8> = bincode::serialize(self).unwrap();
         result

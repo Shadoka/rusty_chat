@@ -1,7 +1,7 @@
 use std::net::{TcpStream, Shutdown};
 use std::io::{Read, Write, BufRead};
 use std::str::from_utf8;
-use common;
+use common::{LoginRequest};
 
 const BUFFER_SIZE: usize = 1024;
 
@@ -12,18 +12,12 @@ struct Input {
 }
 
 fn main() {
-    let test = common::LoginRequest{name : String::from("tilmann"), name_length : 7u8};
-    let serialized = test.to_bytes();
+    let user = get_user();
     match TcpStream::connect("localhost:3333") {
         Ok(mut stream) => {
             println!("connected to port 3333");
-            println!("transmitting name");
-            match stream.write(&serialized){
-                Ok(size) => println!("wrote {} bytes", size),
-                Err(e) => println!("failed to transmit name: {}", e)
-            };
-            println!("name transmitted");
-            let mut input = get_user_input();
+            transmit_user(user, &mut stream);
+            let mut input = get_user_input(String::from(">>"));
             while input.read_string != "exit" {
                 stream.write(&*input.user_input).unwrap();
                 println!("message sent, awaiting reply");
@@ -43,7 +37,7 @@ fn main() {
                     println!("failed to receive data: {}", e);
                     }
                 }
-                input = get_user_input();
+                input = get_user_input(String::from(">>"));
             }
             close_connection(&mut stream);
         },
@@ -51,6 +45,19 @@ fn main() {
             println!("failed to connect: {}", e);
         }
     }
+}
+
+fn get_user() -> LoginRequest {
+    let input = get_user_input(String::from("user name:"));
+    LoginRequest{name: input.read_string}
+}
+
+fn transmit_user(user: LoginRequest, stream: &mut TcpStream) {
+    let serialized = user.to_bytes();
+    match stream.write(&serialized){
+        Ok(size) => println!("wrote {} bytes", size),
+        Err(e) => println!("failed to transmit name: {}", e)
+    };
 }
 
 fn close_connection(connection: &mut TcpStream) {
@@ -64,8 +71,8 @@ fn close_connection(connection: &mut TcpStream) {
     }
 }
 
-fn get_user_input() -> Input {
-    print!(">>");
+fn get_user_input(prompt_text: String) -> Input {
+    print!("{}", prompt_text);
     std::io::stdout().flush().unwrap();
     let input_data = read_line_vector();
     let input_string = from_utf8(&input_data).unwrap().to_string();

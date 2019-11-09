@@ -6,7 +6,6 @@ extern crate serde;
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct LoginRequest {
-    pub name_length: u8,
     pub name: String
 }
 
@@ -26,13 +25,7 @@ pub struct Message {
     pub message: [u8; 1008],
 }
 
-pub struct User {
-    pub name_length: u8,
-    pub name: [u8; 248],
-}
-
 pub struct ChatRoom {
     pub current_user: u8,
-    pub name_length: u8,
-    pub name: [u8; 248],
+    pub name: String
 }

@@ -25,22 +25,7 @@ fn main() {
 }
 
 fn handle_client(mut stream: TcpStream) {
-    // read request - can i get this into a separate function?
-    let mut read_data = vec!(0; LoginRequest::SIZE);
-    let request: Option<LoginRequest> = match stream.read(&mut read_data) {
-        Ok(size) => {
-            if size == 0 {
-                None
-            } else {
-                let request: LoginRequest = bincode::deserialize(&read_data).unwrap();
-                Some(request)
-            }
-        },
-        Err(e) => {
-            println!("error reading the login request from client {}: {}", stream.peer_addr().unwrap(), e);
-            None
-        }
-    };
+    let request = read_login_request(&mut stream);
 
     // TODO: unsuccessful should probably exit here
     match request {
@@ -65,4 +50,22 @@ fn handle_client(mut stream: TcpStream) {
             false
         }
     } {}
+}
+
+fn read_login_request(stream: &mut TcpStream) -> Option<LoginRequest> {
+    let mut read_data = vec!(0; LoginRequest::SIZE);
+    match stream.read(&mut read_data) {
+        Ok(size) => {
+            if size == 0 {
+                None
+            } else {
+                let request: LoginRequest = bincode::deserialize(&read_data).unwrap();
+                Some(request)
+            }
+        },
+        Err(e) => {
+            println!("error reading the login request from client {}: {}", stream.peer_addr().unwrap(), e);
+            None
+        }
+    }
 }

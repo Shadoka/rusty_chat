@@ -16,7 +16,7 @@ fn main() {
     match TcpStream::connect("localhost:3333") {
         Ok(mut stream) => {
             println!("connected to port 3333");
-            transmit_user(user, &mut stream);
+            send_request(user, &mut stream);
             let mut input = get_user_input(String::from(">>"));
             while input.read_string != "exit" {
                 stream.write(&*input.user_input).unwrap();
@@ -52,7 +52,7 @@ fn get_user() -> LoginRequest {
     LoginRequest{name: input.read_string}
 }
 
-fn transmit_user(user: LoginRequest, stream: &mut TcpStream) {
+fn send_request(user: LoginRequest, stream: &mut TcpStream) {
     let serialized = user.to_bytes();
     match stream.write(&serialized){
         Ok(size) => println!("wrote {} bytes", size),

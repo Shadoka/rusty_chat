@@ -2,8 +2,6 @@ extern crate bincode;
 extern crate serde;
 #[macro_use] extern crate serde_derive;
 
-// use serde::{Serialize, Deserialize};
-
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct LoginRequest {
     pub name: String
@@ -25,7 +23,14 @@ pub struct Message {
     pub message: [u8; 1008],
 }
 
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct ChatRoom {
+    pub id: u8,
     pub current_user: u8,
     pub name: String
+}
+
+impl ChatRoom {
+    // TODO: validate()
+    pub const SIZE: usize = 256;
 }

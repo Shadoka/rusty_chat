@@ -33,4 +33,5 @@ pub struct ChatRoom {
 impl ChatRoom {
     // TODO: validate()
     pub const SIZE: usize = 256;
+    pub const NAME_SIZE: usize = 240;
 }

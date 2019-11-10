@@ -1,7 +1,9 @@
 use std::net::{TcpStream, Shutdown};
 use std::io::{Read, Write, BufRead};
 use std::str::from_utf8;
-use common::{LoginRequest};
+use common::{LoginRequest, ChatRoom};
+
+extern crate bincode;
 
 const BUFFER_SIZE: usize = 1024;
 
@@ -17,6 +19,16 @@ fn main() {
         Ok(mut stream) => {
             println!("connected to port 3333");
             send_request(user, &mut stream);
+            let room_name = match receive_room_names(&mut stream) {
+                Some(names) => {
+                    print_room_names(&names);
+                    select_or_create_room()
+                },
+                None => {
+                    select_or_create_room()
+                }
+            };
+            send_room_name(room_name, &mut stream);
             let mut input = get_user_input(String::from(">>"));
             while input.read_string != "exit" {
                 stream.write(&*input.user_input).unwrap();
@@ -47,6 +59,45 @@ fn main() {
     }
 }
 
+fn send_room_name(name: String, stream: &mut TcpStream) {
+    let serialized_name = bincode::serialize(&name).unwrap();
+    match stream.write(&serialized_name) {
+        Ok(size) => println!("room name transmitted, wrote {} bytes", size),
+        Err(e) => println!("error transmitting the room name: {}", e)
+    }
+}
+
+fn print_room_names(names: &Vec<String>) {
+    for name in names {
+        println!("{}", name);
+    }
+}
+
+fn select_or_create_room() -> String {
+    let input_vec = read_line_vector();
+    // annoying - i still dont really get the difference between / neccessity for str + String
+    let fake_string = from_utf8(&input_vec).unwrap();
+    String::from(fake_string)
+}
+
+fn receive_room_names(stream: &mut TcpStream) -> Option<Vec<String>> {
+    let mut buffer = vec!(0; 20 * ChatRoom::NAME_SIZE);
+    match stream.read(&mut buffer) {
+        Ok(size) => {
+            if size == 0 {
+                None
+            } else {
+                let names: Vec<String> = bincode::deserialize(&buffer).unwrap();
+                Some(names)
+            }
+        },
+        Err(e) => {
+            println!("error receiving room names: {}", e);
+            None
+        }
+    }
+}
+
 fn get_user() -> LoginRequest {
     let input = get_user_input(String::from("user name:"));
     LoginRequest{name: input.read_string}
@@ -56,7 +107,7 @@ fn send_request(user: LoginRequest, stream: &mut TcpStream) {
     let serialized = user.to_bytes();
     match stream.write(&serialized){
         Ok(size) => println!("wrote {} bytes", size),
-        Err(e) => println!("failed to transmit name: {}", e)
+        Err(e) => println!("failed to transmit user name: {}", e)
     };
 }
 

@@ -17,7 +17,7 @@ fn main() {
                 thread::spawn({ 
                     let clone = Arc::clone(&rooms);
                     move || {
-                    handle_client(stream, clone);  
+                        handle_client(stream, clone);  
                     }
                 });
             },

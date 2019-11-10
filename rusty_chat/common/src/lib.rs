@@ -23,6 +23,11 @@ pub struct Message {
     pub message: [u8; 1008],
 }
 
+pub struct User {
+    pub id: u8,
+    pub name: String
+}
+
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct ChatRoom {
     pub id: u8,

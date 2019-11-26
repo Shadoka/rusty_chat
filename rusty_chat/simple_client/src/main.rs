@@ -1,11 +1,9 @@
 use std::net::{TcpStream, Shutdown};
 use std::io::{Read, Write, BufRead};
 use std::str::from_utf8;
-use common::{LoginRequest, ChatRoom};
+use common::{LoginRequest, ChatRoom, ChatMode};
 
 extern crate bincode;
-
-const BUFFER_SIZE: usize = 1024;
 
 struct Input {
     user_input: Vec<u8>,
@@ -18,38 +16,13 @@ fn main() {
     match TcpStream::connect("localhost:3333") {
         Ok(mut stream) => {
             println!("connected to port 3333");
+
             send_request(user, &mut stream);
-            let room_name = match receive_room_names(&mut stream) {
-                Some(names) => {
-                    print_room_names(&names);
-                    select_or_create_room()
-                },
-                None => {
-                    select_or_create_room()
-                }
-            };
-            send_room_name(room_name, &mut stream);
-            let mut input = get_user_input(String::from(">>"));
-            while input.read_string != "exit" {
-                stream.write(&*input.user_input).unwrap();
-                println!("message sent, awaiting reply");
-                let mut data = [0 as u8; BUFFER_SIZE];
-                match stream.read(&mut data) {
-                    Ok(_) => {
-                        let mut received_data = data.to_vec();
-                        received_data.truncate(input.length);
-                        if received_data == input.user_input {
-                            println!("reply is ok");
-                        } else {
-                            let text = from_utf8(&*received_data).unwrap();
-                            println!("invalid reply: {}", text);
-                        }
-                    },
-                    Err(e) => {
-                    println!("failed to receive data: {}", e);
-                    }
-                }
-                input = get_user_input(String::from(">>"));
+
+            get_and_send_chat_mode(&mut stream);
+
+            while get_user_input(String::from(">>")).read_string != "exit" {
+                
             }
             close_connection(&mut stream);
         },
@@ -57,6 +30,19 @@ fn main() {
             println!("failed to connect: {}", e);
         }
     }
+}
+
+fn choose_room(stream: &mut TcpStream) {
+    let room_name = match receive_room_names(stream) {
+        Some(names) => {
+            print_room_names(&names);
+            select_or_create_room()
+        },
+        None => {
+            select_or_create_room()
+        }
+    };
+    send_room_name(room_name, stream);
 }
 
 fn send_room_name(name: String, stream: &mut TcpStream) {
@@ -78,6 +64,31 @@ fn select_or_create_room() -> String {
     // annoying - i still dont really get the difference between / neccessity for str + String
     let fake_string = from_utf8(&input_vec).unwrap();
     String::from(fake_string)
+}
+
+fn get_and_send_chat_mode(stream: &mut TcpStream) {
+    let mode = get_chat_mode();
+    let serialized = bincode::serialize(&mode).unwrap();
+    match stream.write(&serialized) {
+        Ok(size) => println!("chat mode transmitted, wrote {} bytes", size),
+        Err(e) => println!("error transmitting the chat mode: {}", e)
+    }
+}
+
+fn get_chat_mode() -> ChatMode {
+    let mut mode: ChatMode = ChatMode::DIRECT;
+    while match get_user_input(String::from("(1) direct chat, (2) chat rooms")).read_string.as_ref() {
+        "1" => {
+            mode = ChatMode::DIRECT;
+            false
+        },
+        "2" => {
+            mode = ChatMode::ROOM;
+            false
+        },
+        _ => true
+    } {}
+    mode
 }
 
 fn receive_room_names(stream: &mut TcpStream) -> Option<Vec<String>> {

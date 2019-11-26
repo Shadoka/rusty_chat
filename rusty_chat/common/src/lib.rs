@@ -28,6 +28,21 @@ pub struct User {
     pub name: String
 }
 
+impl User {
+    pub const NAME_SIZE: usize = 256;
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
+pub enum ChatMode {
+    DIRECT,
+    ROOM
+}
+
+impl ChatMode {
+    // TODO: how are enums sized? addendum: i appear to send 4 bytes
+    pub const SIZE: usize = 64;
+}
+
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct ChatRoom {
     pub id: u8,

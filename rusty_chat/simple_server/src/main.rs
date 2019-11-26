@@ -2,10 +2,12 @@ use std::thread;
 use std::sync::{Arc, Mutex};
 use std::net::{TcpListener, TcpStream, Shutdown};
 use std::io::{Read, Write};
-use common::{LoginRequest, ChatRoom, User};
+use common::{LoginRequest, ChatRoom, User, ChatMode};
 
 extern crate bincode;
 
+// TODO: receiving 0 bytes in any receive* method means the client quit on us -> do something sensible
+// TODO: find logging crate
 fn main() {
     let listener = TcpListener::bind("0.0.0.0:3333").unwrap();
 
@@ -43,35 +45,55 @@ fn handle_client(mut stream: TcpStream, rooms: Arc<Mutex<Vec<ChatRoom>>>, users:
         None => create_and_add_user(String::from("anon"), &users)
     };
 
-    let room_names = get_room_info(&rooms);
-    send_room_info(room_names, &mut stream);
-
-    let room_name = receive_room_name(&mut stream);
-    match room_name {
-        Some(name) => println!("user wants to join {}", name),
-        None => println!("no room name available")
-    }
-
-    // TODO: create the room, attach user id to it
-    // maybe first implement bidirectional chatting between two users?
-
-    let mut data = [0 as u8; 1024];
-    while match stream.read(&mut data) {
-        Ok(size) => {
-            if size == 0 {
-                println!("client {} quit", stream.peer_addr().unwrap());
-                false
+    while match receive_chat_mode(&mut stream) {
+        Some(m) => {
+            if m == ChatMode::DIRECT {
+                direct_mode(&mut stream, &users, user_id)
             } else {
-                stream.write(&data[0..size]).unwrap();
-                true
+                room_mode(&mut stream, &rooms)
             }
         },
-        Err(_) => {
-            println!("error occurred, terminating connection with {}", stream.peer_addr().unwrap());
+        None => {
+            println!("no mode selected, terminating connection");
             stream.shutdown(Shutdown::Both).unwrap();
             false
         }
     } {}
+}
+
+fn direct_mode(stream: &mut TcpStream, users: &Arc<Mutex<Vec<User>>>, own_user_id: u8) -> bool {
+    let user_names = get_user_names(&users);
+    send_string_vec(user_names, stream);
+
+    let user_name_buffer = vec!(0; User::NAME_SIZE);
+    let to_chat_with = receive_string(stream, user_name_buffer);
+    let own_name = get_name_by_id(own_user_id, &users).unwrap();
+    match to_chat_with {
+        Some(name) => println!("{} wants to chat with {}", name, own_name),
+        None => println!("no name submitted")
+    }
+    true
+}
+
+fn room_mode(stream: &mut TcpStream, rooms: &Arc<Mutex<Vec<ChatRoom>>>) -> bool {
+    let room_names = get_room_info(&rooms);
+    send_string_vec(room_names, stream);
+
+    let room_name_buffer = vec!(0; ChatRoom::NAME_SIZE);
+    let room_name = receive_string(stream, room_name_buffer);
+    match room_name {
+        Some(name) => println!("user wants to join {}", name),
+        None => println!("no room name available")
+    }
+    true
+}
+
+fn get_name_by_id(id: u8, users: &Arc<Mutex<Vec<User>>>) -> Option<String> {
+    let user_vec = users.lock().unwrap();
+    match user_vec.iter().find(|u| u.id == id) {
+        Some(user) => Some(user.name.clone()),
+        None => None
+    }
 }
 
 fn create_and_add_user(user_name: String, users: &Arc<Mutex<Vec<User>>>) -> u8 {
@@ -87,8 +109,8 @@ fn create_chat_room(room_name: String, room_vec: &mut Vec<ChatRoom>) {
     room_vec.push(ChatRoom{id: room_id, current_user: 0, name: room_name});
 }
 
-fn receive_room_name(stream: &mut TcpStream) -> Option<String> {
-    let mut buffer = vec!(0; ChatRoom::NAME_SIZE);
+// TODO: i bet i can generify the return type
+fn receive_string(stream: &mut TcpStream, mut buffer: Vec<u8>) -> Option<String> {
     match stream.read(&mut buffer) {
         Ok(size) => {
             if size == 0 {
@@ -105,7 +127,25 @@ fn receive_room_name(stream: &mut TcpStream) -> Option<String> {
     }
 }
 
-fn send_room_info(room_names: Vec<String>, stream: &mut TcpStream) {
+fn receive_chat_mode(stream: &mut TcpStream) -> Option<ChatMode> {
+    let mut buffer = vec!(0; ChatMode::SIZE);
+    match stream.read(&mut buffer) {
+        Ok(size) => {
+            if size == 0 {
+                None
+            } else {
+                let mode: ChatMode = bincode::deserialize(&buffer).unwrap();
+                Some(mode)
+            }
+        },
+        Err(e) => {
+            println!("error reading the chat mode from the client {}: {}", stream.peer_addr().unwrap(), e);
+            None
+        }
+    }
+}
+
+fn send_string_vec(room_names: Vec<String>, stream: &mut TcpStream) {
     let serialized_names = bincode::serialize(&room_names).unwrap();
     stream.write(&serialized_names).unwrap();
 }
@@ -117,6 +157,15 @@ fn get_room_info(rooms: &Arc<Mutex<Vec<ChatRoom>>>) -> Vec<String> {
         room_names.push(String::from(room.name.as_str()));
     }
     room_names
+}
+
+fn get_user_names(users: &Arc<Mutex<Vec<User>>>) -> Vec<String> {
+    let user_vec = users.lock().unwrap();
+    let mut user_names: Vec<String> = Vec::new();
+    for user in user_vec.iter() {
+        user_names.push(String::from(user.name.as_str()))
+    }
+    user_names
 }
 
 fn receive_login_request(stream: &mut TcpStream) -> Option<LoginRequest> {

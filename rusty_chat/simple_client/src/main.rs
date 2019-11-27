@@ -1,7 +1,7 @@
 use std::net::{TcpStream, Shutdown};
 use std::io::{Read, Write, BufRead};
 use std::str::from_utf8;
-use common::{LoginRequest, ChatRoom, ChatMode};
+use common::{LoginRequest, ChatRoom, ChatMode, User};
 
 extern crate bincode;
 
@@ -19,7 +19,13 @@ fn main() {
 
             send_request(user, &mut stream);
 
-            get_and_send_chat_mode(&mut stream);
+            let mode = get_and_send_chat_mode(&mut stream);
+
+            if mode == ChatMode::DIRECT {
+                direct_mode(&mut stream);
+            } else {
+
+            }
 
             while get_user_input(String::from(">>")).read_string != "exit" {
                 
@@ -32,20 +38,41 @@ fn main() {
     }
 }
 
-fn choose_room(stream: &mut TcpStream) {
-    let room_name = match receive_room_names(stream) {
+fn direct_mode(stream: &mut TcpStream) {
+    let mut buffer = vec!(0; 20 * User::NAME_SIZE);
+    let chat_partner = match receive_string_vec(stream, &mut buffer){
         Some(names) => {
-            print_room_names(&names);
+            print_string_vec(&names);
+            select_chat_partner()
+        },
+        None => {
+            String::from("")
+        }
+    };
+    send_string(chat_partner.clone(), stream);
+}
+
+// TODO: switch to numbers + 'exit' to go back
+fn select_chat_partner() -> String {
+    let input = get_user_input(String::from("Select chat partner: "));
+    return input.read_string;
+}
+
+fn choose_room(stream: &mut TcpStream) {
+    let mut buffer = vec!(0; 20 * ChatRoom::NAME_SIZE);
+    let room_name = match receive_string_vec(stream, &mut buffer) {
+        Some(names) => {
+            print_string_vec(&names);
             select_or_create_room()
         },
         None => {
             select_or_create_room()
         }
     };
-    send_room_name(room_name, stream);
+    send_string(room_name, stream);
 }
 
-fn send_room_name(name: String, stream: &mut TcpStream) {
+fn send_string(name: String, stream: &mut TcpStream) {
     let serialized_name = bincode::serialize(&name).unwrap();
     match stream.write(&serialized_name) {
         Ok(size) => println!("room name transmitted, wrote {} bytes", size),
@@ -53,7 +80,8 @@ fn send_room_name(name: String, stream: &mut TcpStream) {
     }
 }
 
-fn print_room_names(names: &Vec<String>) {
+// TODO: Better print it enumerated and pick with numbers
+fn print_string_vec(names: &Vec<String>) {
     for name in names {
         println!("{}", name);
     }
@@ -66,18 +94,19 @@ fn select_or_create_room() -> String {
     String::from(fake_string)
 }
 
-fn get_and_send_chat_mode(stream: &mut TcpStream) {
+fn get_and_send_chat_mode(stream: &mut TcpStream) -> ChatMode {
     let mode = get_chat_mode();
     let serialized = bincode::serialize(&mode).unwrap();
     match stream.write(&serialized) {
         Ok(size) => println!("chat mode transmitted, wrote {} bytes", size),
         Err(e) => println!("error transmitting the chat mode: {}", e)
     }
+    mode
 }
 
 fn get_chat_mode() -> ChatMode {
     let mut mode: ChatMode = ChatMode::DIRECT;
-    while match get_user_input(String::from("(1) direct chat, (2) chat rooms")).read_string.as_ref() {
+    while match get_user_input(String::from("(1) direct chat, (2) chat rooms: ")).read_string.as_ref() {
         "1" => {
             mode = ChatMode::DIRECT;
             false
@@ -91,9 +120,8 @@ fn get_chat_mode() -> ChatMode {
     mode
 }
 
-fn receive_room_names(stream: &mut TcpStream) -> Option<Vec<String>> {
-    let mut buffer = vec!(0; 20 * ChatRoom::NAME_SIZE);
-    match stream.read(&mut buffer) {
+fn receive_string_vec(stream: &mut TcpStream, buffer: &mut Vec<u8>) -> Option<Vec<String>> {
+    match stream.read(buffer) {
         Ok(size) => {
             if size == 0 {
                 None

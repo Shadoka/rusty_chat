@@ -1,4 +1,5 @@
 use std::thread;
+use std::time;
 use std::sync::{Arc, Mutex};
 use std::net::{TcpListener, TcpStream, Shutdown};
 use std::io::{Read, Write};
@@ -62,6 +63,11 @@ fn handle_client(mut stream: TcpStream, rooms: Arc<Mutex<Vec<ChatRoom>>>, users:
 }
 
 fn direct_mode(stream: &mut TcpStream, users: &Arc<Mutex<Vec<User>>>, own_user_id: u8) -> bool {
+    // we have to wait for atleast another user
+    // TODO: send updates, for as long as we are not chatting
+    while check_for_users(&users) {
+        thread::sleep(time::Duration::from_millis(1000));
+    }
     let user_names = get_user_names(&users);
     send_string_vec(user_names, stream);
 
@@ -69,7 +75,7 @@ fn direct_mode(stream: &mut TcpStream, users: &Arc<Mutex<Vec<User>>>, own_user_i
     let to_chat_with = receive_string(stream, user_name_buffer);
     let own_name = get_name_by_id(own_user_id, &users).unwrap();
     match to_chat_with {
-        Some(name) => println!("{} wants to chat with {}", name, own_name),
+        Some(name) => println!("{} wants to chat with {}", own_name, name),
         None => println!("no name submitted")
     }
     true
@@ -86,6 +92,13 @@ fn room_mode(stream: &mut TcpStream, rooms: &Arc<Mutex<Vec<ChatRoom>>>) -> bool 
         None => println!("no room name available")
     }
     true
+}
+
+// i need a fn for this, dont i?
+// as i understand it, i hold the lock for the duration of the scope i called lock() in
+fn check_for_users(users: &Arc<Mutex<Vec<User>>>) -> bool {
+    let user_vec = users.lock().unwrap();
+    user_vec.len() <= 1
 }
 
 fn get_name_by_id(id: u8, users: &Arc<Mutex<Vec<User>>>) -> Option<String> {

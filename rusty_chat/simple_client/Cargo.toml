@@ -10,3 +10,4 @@ edition = "2018"
 
 common = {path = "../common"}
 bincode = "*"
+crossbeam-channel = "*"

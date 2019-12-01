@@ -17,10 +17,14 @@ impl LoginRequest {
     }
 }
 
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct Message {
-    pub message_count: u8,
-    pub current_message_id: u8,
-    pub message: [u8; 1008],
+    // TODO: Multi-Messages
+    pub message: String
+}
+
+impl Message {
+    pub const SIZE: usize = 1024;
 }
 
 pub struct User {

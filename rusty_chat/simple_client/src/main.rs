@@ -1,9 +1,12 @@
-use std::net::{TcpStream, Shutdown};
+use std::net::{TcpListener, TcpStream, Shutdown};
 use std::io::{Read, Write, BufRead};
 use std::str::from_utf8;
-use common::{LoginRequest, ChatRoom, ChatMode, User, MasterSelectionResult};
+use std::thread;
+use common::{LoginRequest, ChatRoom, ChatMode, User, MasterSelectionResult, Message};
+use crossbeam_channel::{Sender, Receiver};
 
 extern crate bincode;
+extern crate crossbeam_channel;
 
 struct Input {
     user_input: Vec<u8>,
@@ -26,11 +29,6 @@ fn main() {
             } else {
 
             }
-
-            while get_user_input(String::from(">>")).read_string != "exit" {
-                
-            }
-            close_connection(&mut stream);
         },
         Err(e) => {
             println!("failed to connect: {}", e);
@@ -40,6 +38,7 @@ fn main() {
 
 fn direct_mode(stream: &mut TcpStream) {
     let mut buffer = vec!(0; 20 * User::NAME_SIZE);
+    // TODO: whats up with that empty name?
     let chat_partner = match receive_string_vec(stream, &mut buffer){
         Some(names) => {
             print_string_vec(&names);
@@ -52,12 +51,110 @@ fn direct_mode(stream: &mut TcpStream) {
     send_string(chat_partner.clone(), stream);
 
     let master_selection = receive_master_selection(stream).expect("no selection submitted");
-    // TODO: disconnect from server
+    close_connection(stream);
+    drop(stream);
+
     if master_selection.is_own_ip {
-        // TODO: spinup own server socket & wait for incoming connection
+        start_direct_server(chat_partner);
     } else {
         // TODO: open connection in new thread & start writing
     }
+}
+
+fn start_direct_server(chat_partner: String) {
+    let (snd, rcv): (Sender<String>, Receiver<String>) = crossbeam_channel::unbounded();
+    thread::spawn(move || {
+        print_messages_to_ui(rcv, chat_partner)
+    });
+    master_server_direct(snd);
+}
+
+fn master_server_direct(sender: Sender<String>) {
+    let listener = TcpListener::bind("0.0.0.0:3334").unwrap();
+    // TODO: do i really wait for multiple connections here?
+    for stream in listener.incoming() {
+        match stream {
+            Ok(mut stream) => {
+                let reader_clone = sender.clone();
+                sender.send(String::from("/connected")).unwrap();
+
+                let mut read_stream = stream.try_clone().unwrap();
+                thread::spawn(move || {
+                    read_incoming_messages(reader_clone, &mut read_stream)
+                });
+
+                let mut write_stream = stream.try_clone().unwrap();
+                let input_clone = sender.clone();
+                user_input_loop(input_clone, &mut write_stream);
+
+                close_connection(&mut stream);
+            },
+            Err(e) => println!("Error: {}", e)
+        }
+    }
+}
+
+// TODO: do the real input loop here
+fn user_input_loop(sender: Sender<String>, stream: &mut TcpStream) {
+
+    while get_user_input(String::from(">>")).read_string != "exit" {
+                
+    }
+}
+
+fn read_incoming_messages(sender: Sender<String>, stream: &mut TcpStream) {
+    let mut buffer = vec!(0; Message::SIZE);
+    while match stream.read(&mut buffer) {
+        Ok(size) => {
+            let mut continue_reading = true;
+            if size == 0 {
+                // TODO: chat partner quit, send it to print loop
+                continue_reading = false;
+            } else {
+                let msg = deserialize_message(&buffer);
+                sender.send(msg.message).unwrap();
+            }
+            continue_reading
+        },
+        Err(_) => {
+            // TODO: send info to print loop
+            false
+        }
+    } {}
+}
+
+fn deserialize_message(buffer: &[u8]) -> Message {
+    bincode::deserialize(buffer).unwrap()
+}
+
+fn print_messages_to_ui(receiver: Receiver<String>, chat_partner: String) {
+    println!("waiting for chat partner to connect...");
+    let con_success = match receiver.recv() {
+        Ok(msg) => &msg == "/connected",
+        Err(_) => false
+    };
+
+    if !con_success {
+        println!("chat partner was unable to connect successfully");
+        return ();
+    } else {
+        println!("{} connected successfully!", chat_partner);
+    }
+
+    while match receiver.recv() {
+        Ok(message) => {
+            let mut continue_loop = false;
+            if message != "/quit" {
+                println!("{}: {}", chat_partner, message);
+                continue_loop = true
+            }
+            continue_loop
+        },
+        Err(e) => {
+            println!("ERROR: {}", e);
+            false
+        }
+    } {}
 }
 
 // TODO: switch to numbers + 'exit' to go back

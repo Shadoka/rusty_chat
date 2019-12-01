@@ -25,7 +25,8 @@ pub struct Message {
 
 pub struct User {
     pub id: u8,
-    pub name: String
+    pub name: String,
+    pub ip_address: String
 }
 
 impl User {
@@ -54,4 +55,14 @@ impl ChatRoom {
     // TODO: validate()
     pub const SIZE: usize = 256;
     pub const NAME_SIZE: usize = 240;
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
+pub struct MasterSelectionResult {
+    pub target_ip: String,
+    pub is_own_ip: bool
+}
+
+impl MasterSelectionResult {
+    pub const SIZE: usize = 128;
 }

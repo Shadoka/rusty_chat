@@ -1,7 +1,7 @@
 use std::net::{TcpStream, Shutdown};
 use std::io::{Read, Write, BufRead};
 use std::str::from_utf8;
-use common::{LoginRequest, ChatRoom, ChatMode, User};
+use common::{LoginRequest, ChatRoom, ChatMode, User, MasterSelectionResult};
 
 extern crate bincode;
 
@@ -50,6 +50,14 @@ fn direct_mode(stream: &mut TcpStream) {
         }
     };
     send_string(chat_partner.clone(), stream);
+
+    let master_selection = receive_master_selection(stream).expect("no selection submitted");
+    // TODO: disconnect from server
+    if master_selection.is_own_ip {
+        // TODO: spinup own server socket & wait for incoming connection
+    } else {
+        // TODO: open connection in new thread & start writing
+    }
 }
 
 // TODO: switch to numbers + 'exit' to go back
@@ -118,6 +126,24 @@ fn get_chat_mode() -> ChatMode {
         _ => true
     } {}
     mode
+}
+
+fn receive_master_selection(stream: &mut TcpStream) -> Option<MasterSelectionResult> {
+    let mut buffer = vec!(0; MasterSelectionResult::SIZE);
+    match stream.read(&mut buffer) {
+        Ok(size) => {
+            if size == 0 {
+                None
+            } else {
+                let result: MasterSelectionResult = bincode::deserialize(&buffer).unwrap();
+                Some(result)
+            }
+        },
+        Err(e) => {
+            println!("error receiving master selection result: {}", e);
+            None
+        }
+    }
 }
 
 fn receive_string_vec(stream: &mut TcpStream, buffer: &mut Vec<u8>) -> Option<Vec<String>> {

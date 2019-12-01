@@ -3,9 +3,11 @@ use std::time;
 use std::sync::{Arc, Mutex};
 use std::net::{TcpListener, TcpStream, Shutdown};
 use std::io::{Read, Write};
-use common::{LoginRequest, ChatRoom, User, ChatMode};
+use common::{LoginRequest, ChatRoom, User, ChatMode, MasterSelectionResult};
+use rand::{thread_rng, Rng};
 
 extern crate bincode;
+extern crate rand;
 
 // TODO: receiving 0 bytes in any receive* method means the client quit on us -> do something sensible
 // TODO: find logging crate
@@ -42,8 +44,8 @@ fn main() {
 fn handle_client(mut stream: TcpStream, rooms: Arc<Mutex<Vec<ChatRoom>>>, users: Arc<Mutex<Vec<User>>>) {
     let request = receive_login_request(&mut stream);
     let user_id = match request {
-        Some(r) => create_and_add_user(r.name, &users),
-        None => create_and_add_user(String::from("anon"), &users)
+        Some(r) => create_and_add_user(r.name, stream.local_addr().unwrap().to_string(), &users),
+        None => create_and_add_user(String::from("anon"), stream.local_addr().unwrap().to_string(), &users)
     };
 
     while match receive_chat_mode(&mut stream) {
@@ -74,11 +76,55 @@ fn direct_mode(stream: &mut TcpStream, users: &Arc<Mutex<Vec<User>>>, own_user_i
     let user_name_buffer = vec!(0; User::NAME_SIZE);
     let to_chat_with = receive_string(stream, user_name_buffer);
     let own_name = get_name_by_id(own_user_id, &users).unwrap();
-    match to_chat_with {
-        Some(name) => println!("{} wants to chat with {}", own_name, name),
-        None => println!("no name submitted")
+    let other_name = match to_chat_with {
+        Some(name) => name,
+        None => String::from("")
+    };
+    
+    if &other_name == "" {
+    	println!("no name submitted");
+    	return true
     }
+    println!("{} wants to chat with {}", own_name, other_name);
+    
+    let mut ids = Vec::new();
+    ids.push(own_user_id);
+    ids.push(get_id_by_name(&other_name, &users).unwrap());
+    let master_id = choose_master(ids);
+    let master_ip = get_address_by_id(own_user_id, &users).unwrap();
+    
+    // TODO: send info to other client thread
+
+    let mut selection_result = MasterSelectionResult{target_ip: master_ip, is_own_ip: false};
+    if master_id == own_user_id {
+        selection_result.is_own_ip = true;
+    }
+
+    // TODO: send info to client and prepare to disconnect (ie. remove client from user list)
+
     true
+}
+
+fn get_address_by_id(id: u8, users: &Arc<Mutex<Vec<User>>>) -> Option<String> {
+    let user_vec = users.lock().unwrap();
+    match user_vec.iter().find(|u| u.id == id) {
+        Some(user) => Some(user.ip_address.clone()),
+        None => None
+    }
+}
+
+fn get_id_by_name(name: &String, users: &Arc<Mutex<Vec<User>>>) -> Option<u8> {
+	let user_vec = users.lock().unwrap();
+	match user_vec.iter().find(|u| &u.name == name) {
+		Some(user) => Some(user.id),
+		None => None
+	}
+}
+
+fn choose_master(ids: Vec<u8>) -> u8 {
+	let mut rng = thread_rng();
+	let selection_id: usize = rng.gen_range(0, ids.len());
+	ids[selection_id]
 }
 
 fn room_mode(stream: &mut TcpStream, rooms: &Arc<Mutex<Vec<ChatRoom>>>) -> bool {
@@ -109,10 +155,10 @@ fn get_name_by_id(id: u8, users: &Arc<Mutex<Vec<User>>>) -> Option<String> {
     }
 }
 
-fn create_and_add_user(user_name: String, users: &Arc<Mutex<Vec<User>>>) -> u8 {
+fn create_and_add_user(user_name: String, ip_address: String, users: &Arc<Mutex<Vec<User>>>) -> u8 {
     let mut user_vec = users.lock().unwrap();
     let user_id = user_vec.len() as u8;
-    let user = User{id: user_id, name: user_name};
+    let user = User{id: user_id, name: user_name, ip_address: ip_address};
     user_vec.push(user);
     user_id
 }

@@ -2,81 +2,108 @@ use std::net::{TcpListener, TcpStream, Shutdown};
 use std::io::{Read, Write, BufRead};
 use std::str::from_utf8;
 use std::thread;
+use std::sync::{Arc, Mutex};
 use common::{LoginRequest, ChatRoom, ChatMode, User, MasterSelectionResult, Message};
 use crossbeam_channel::{Sender, Receiver};
+use console::{Term, Style};
 
 extern crate bincode;
 extern crate crossbeam_channel;
+extern crate console;
 
-struct Input {
-    user_input: Vec<u8>,
-    read_string: String,
-    length: usize
+struct AppTerm {
+    console: Term,
+    write_index: usize,
+    max_row: usize
+}
+
+enum InternMessage {
+    SystemMessage(String),
+    ChatMessage(MessageInfo)
+}
+
+struct MessageInfo {
+    message_writer: String,
+    message: String
 }
 
 fn main() {
-    let user = get_user();
+    let crate_term = Term::stdout();
+    let (rows, _) = crate_term.size();
+    let term = AppTerm{console: crate_term, write_index: 0, max_row: rows as usize};
+    term.console.clear_screen().unwrap();
+    term.console.move_cursor_to(0, rows as usize).unwrap();
+
+    let threadsafe_term = Arc::new(Mutex::new(term));
+
+    let user = get_user(&threadsafe_term);
     match TcpStream::connect("localhost:3333") {
         Ok(mut stream) => {
-            println!("connected to port 3333");
+            write_sys_message(&threadsafe_term, "connected to port 3333");
 
-            send_request(user, &mut stream);
+            send_request(user, &mut stream, &threadsafe_term);
 
-            let mode = get_and_send_chat_mode(&mut stream);
+            let mode = get_and_send_chat_mode(&mut stream, &threadsafe_term);
 
             if mode == ChatMode::DIRECT {
-                direct_mode(&mut stream);
+                direct_mode(&mut stream, threadsafe_term);
             } else {
 
             }
         },
         Err(e) => {
-            println!("failed to connect: {}", e);
+            write_err_message(&threadsafe_term, format!("failed to connect: {}", e).as_str())
         }
     }
 }
 
-fn direct_mode(stream: &mut TcpStream) {
+fn direct_mode(stream: &mut TcpStream, term: Arc<Mutex<AppTerm>>) {
     let mut buffer = vec!(0; 20 * User::NAME_SIZE);
     // TODO: whats up with that empty name?
     let chat_partner = match receive_string_vec(stream, &mut buffer){
         Some(names) => {
             print_string_vec(&names);
-            select_chat_partner()
+            select_chat_partner(&term)
         },
         None => {
             String::from("")
         }
     };
-    send_string(chat_partner.clone(), stream);
+    send_string(chat_partner.clone(), stream, &term);
 
+    // TODO: handle bad case
     let master_selection = receive_master_selection(stream).expect("no selection submitted");
-    close_connection(stream);
+    close_connection(stream, &term);
     drop(stream);
 
     if master_selection.is_own_ip {
-        start_direct_server(chat_partner);
+        start_direct_server(chat_partner, term);
     } else {
         // TODO: open connection in new thread & start writing
     }
 }
 
-fn start_direct_server(chat_partner: String) {
-    let (snd, rcv): (Sender<String>, Receiver<String>) = crossbeam_channel::unbounded();
+fn start_direct_server(chat_partner: String, term: Arc<Mutex<AppTerm>>) {
+    let (snd, rcv): (Sender<InternMessage>, Receiver<InternMessage>) = crossbeam_channel::unbounded();
+    let term_clone = term.clone();
     thread::spawn(move || {
-        print_messages_to_ui(rcv, chat_partner)
+        print_messages_to_ui(rcv, chat_partner, term_clone)
     });
-    master_server_direct(snd);
+    master_server_direct(snd, &term);
 }
 
-fn master_server_direct(sender: Sender<String>) {
+fn master_server_direct(sender: Sender<InternMessage>, term: &Arc<Mutex<AppTerm>>) {
     let listener = TcpListener::bind("0.0.0.0:3334").unwrap();
     // TODO: do i really wait for multiple connections here?
     for stream in listener.incoming() {
         match stream {
-            Ok(mut stream) => {
+            Ok(stream) => {
                 let reader_clone = sender.clone();
-                sender.send(String::from("/connected")).unwrap();
+                // TODO: we uhhh.. dont have our name :D
+                // let mut message = MessageInfo{message_writer: String::from("myself"), message: String::from("")};
+
+                let message = InternMessage::SystemMessage(String::from("/connected"));
+                sender.send(message).unwrap();
 
                 let mut read_stream = stream.try_clone().unwrap();
                 thread::spawn(move || {
@@ -85,24 +112,71 @@ fn master_server_direct(sender: Sender<String>) {
 
                 let mut write_stream = stream.try_clone().unwrap();
                 let input_clone = sender.clone();
-                user_input_loop(input_clone, &mut write_stream);
-
-                close_connection(&mut stream);
+                user_input_loop(input_clone, &mut write_stream, term);
             },
-            Err(e) => println!("Error: {}", e)
+            Err(e) => write_err_message(&term, &format!("Error: {}", e))
         }
     }
 }
 
-// TODO: do the real input loop here
-fn user_input_loop(sender: Sender<String>, stream: &mut TcpStream) {
+fn write_sys_message(term: &Arc<Mutex<AppTerm>>, message: &str) {
+    write_string_to_console(term, message, Style::new().green());
+}
 
-    while get_user_input(String::from(">>")).read_string != "exit" {
-                
+fn write_err_message(term: &Arc<Mutex<AppTerm>>, message: &str) {
+    write_string_to_console(term, message, Style::new().red());
+}
+
+fn write_string_to_console(arc_term: &Arc<Mutex<AppTerm>>, message: &str, style: Style) {
+    let mut term = arc_term.lock().unwrap();
+    term.console.move_cursor_to(0, term.write_index).unwrap();
+    term.console.write_line(format!("{}", style.apply_to(message)).as_str()).unwrap();
+    term.write_index = term.write_index + 1;
+    if term.write_index >= term.max_row {
+        term.console.clear_line().unwrap();
+        term.console.move_cursor_to(0, term.write_index + 1).unwrap();
+    } else {
+        term.console.move_cursor_to(0, term.max_row).unwrap();
+        term.console.clear_line().unwrap();
     }
 }
 
-fn read_incoming_messages(sender: Sender<String>, stream: &mut TcpStream) {
+// TODO: do the real input loop here
+fn user_input_loop(sender: Sender<InternMessage>, stream: &mut TcpStream, term: &Arc<Mutex<AppTerm>>) {
+    while match read_line(term, ">>") {
+        input => {
+            let mut continue_chat = true;
+            if &input == "/exit" {
+                let info = MessageInfo{message_writer: String::from("myself"), message: String::from("/exit")};
+                sender.send(InternMessage::ChatMessage(info)).unwrap();
+                reset_input_line(&term);
+                close_connection(stream, &term);
+
+                continue_chat = false;
+            } else {
+                let message_to_send = Message{message: input.clone()};
+                send_message(message_to_send, stream);
+
+                let info = MessageInfo{message_writer: String::from("myself"), message: input};
+                sender.send(InternMessage::ChatMessage(info)).unwrap();
+                reset_input_line(&term);
+            }
+            continue_chat
+        }
+    } {}
+}
+
+fn reset_input_line(arc_term: &Arc<Mutex<AppTerm>>) {
+    let term = arc_term.lock().unwrap();
+    term.console.clear_line().unwrap();
+}
+
+fn send_message(msg: Message, stream: &mut TcpStream) {
+    let serialized = bincode::serialize(&msg).unwrap();
+    stream.write(&serialized).expect("catastrophic failure");
+}
+
+fn read_incoming_messages(sender: Sender<InternMessage>, stream: &mut TcpStream) {
     let mut buffer = vec!(0; Message::SIZE);
     while match stream.read(&mut buffer) {
         Ok(size) => {
@@ -112,7 +186,9 @@ fn read_incoming_messages(sender: Sender<String>, stream: &mut TcpStream) {
                 continue_reading = false;
             } else {
                 let msg = deserialize_message(&buffer);
-                sender.send(msg.message).unwrap();
+                // TODO: yo i need that name
+                let info = MessageInfo{message: msg.message, message_writer: String::from("other")};
+                sender.send(InternMessage::ChatMessage(info)).unwrap();
             }
             continue_reading
         },
@@ -127,40 +203,60 @@ fn deserialize_message(buffer: &[u8]) -> Message {
     bincode::deserialize(buffer).unwrap()
 }
 
-fn print_messages_to_ui(receiver: Receiver<String>, chat_partner: String) {
-    println!("waiting for chat partner to connect...");
+fn print_messages_to_ui(receiver: Receiver<InternMessage>, chat_partner: String, term: Arc<Mutex<AppTerm>>) {
+    write_sys_message(&term, "waiting for chat partner to connect...");
     let con_success = match receiver.recv() {
-        Ok(msg) => &msg == "/connected",
+        Ok(msg) => {
+            match msg {
+                InternMessage::SystemMessage(message) => &message == "/connected",
+                _ => false
+            }
+        },
         Err(_) => false
     };
 
     if !con_success {
-        println!("chat partner was unable to connect successfully");
+        write_err_message(&term, "chat partner was unable to connect successfully");
         return ();
     } else {
-        println!("{} connected successfully!", chat_partner);
+        write_sys_message(&term, &format!("{} connected successfully!", chat_partner));
     }
 
     while match receiver.recv() {
         Ok(message) => {
             let mut continue_loop = false;
-            if message != "/quit" {
-                println!("{}: {}", chat_partner, message);
-                continue_loop = true
+
+            match message {
+                InternMessage::ChatMessage(info) => {
+                    if &info.message != "/exit" {
+                        write_string_to_console(&term, &info.message, Style::new().yellow());
+                        println!("{}: {}", info.message_writer, info.message);
+                        continue_loop = true
+                    }
+                },
+                InternMessage::SystemMessage(text) => {
+                    if &text == "/terminated" {
+                        write_sys_message(&term, "connection with your chat partner was terminated");
+                    } else {
+                        write_sys_message(&term, &text);
+                        continue_loop = true;
+                    }
+                }
             }
+            
             continue_loop
         },
         Err(e) => {
-            println!("ERROR: {}", e);
+            write_err_message(&term, &format!("ERROR: {}", e));
             false
         }
     } {}
 }
 
 // TODO: switch to numbers + 'exit' to go back
-fn select_chat_partner() -> String {
-    let input = get_user_input(String::from("Select chat partner: "));
-    return input.read_string;
+fn select_chat_partner(term: &Arc<Mutex<AppTerm>>) -> String {
+    let input = read_line(term, "Select chat partner: ");
+    return input;
 }
 
 fn choose_room(stream: &mut TcpStream) {
@@ -174,14 +270,14 @@ fn choose_room(stream: &mut TcpStream) {
             select_or_create_room()
         }
     };
-    send_string(room_name, stream);
+    //send_string(room_name, stream);
 }
 
-fn send_string(name: String, stream: &mut TcpStream) {
+fn send_string(name: String, stream: &mut TcpStream, term: &Arc<Mutex<AppTerm>>) {
     let serialized_name = bincode::serialize(&name).unwrap();
     match stream.write(&serialized_name) {
-        Ok(size) => println!("room name transmitted, wrote {} bytes", size),
-        Err(e) => println!("error transmitting the room name: {}", e)
+        Ok(size) => write_sys_message(term, &format!("room name transmitted, wrote {} bytes", size)),
+        Err(e) => write_err_message(term, &format!("error transmitting the room name: {}", e))
     }
 }
 
@@ -193,25 +289,25 @@ fn print_string_vec(names: &Vec<String>) {
 }
 
 fn select_or_create_room() -> String {
-    let input_vec = read_line_vector();
+    // let input_vec = read_line("");
     // annoying - i still dont really get the difference between / neccessity for str + String
-    let fake_string = from_utf8(&input_vec).unwrap();
-    String::from(fake_string)
+    //let fake_string = from_utf8(&input_vec).unwrap();
+    String::from("")
 }
 
-fn get_and_send_chat_mode(stream: &mut TcpStream) -> ChatMode {
-    let mode = get_chat_mode();
+fn get_and_send_chat_mode(stream: &mut TcpStream, term: &Arc<Mutex<AppTerm>>) -> ChatMode {
+    let mode = get_chat_mode(term);
     let serialized = bincode::serialize(&mode).unwrap();
     match stream.write(&serialized) {
-        Ok(size) => println!("chat mode transmitted, wrote {} bytes", size),
-        Err(e) => println!("error transmitting the chat mode: {}", e)
+        Ok(size) => write_sys_message(term, &format!("chat mode transmitted, wrote {} bytes", size)),
+        Err(e) => write_err_message(term, &format!("error transmitting the chat mode: {}", e))
     }
     mode
 }
 
-fn get_chat_mode() -> ChatMode {
+fn get_chat_mode(term: &Arc<Mutex<AppTerm>>) -> ChatMode {
     let mut mode: ChatMode = ChatMode::DIRECT;
-    while match get_user_input(String::from("(1) direct chat, (2) chat rooms: ")).read_string.as_ref() {
+    while match read_line(term, "(1) direct chat, (2) chat rooms: ").as_str() {
         "1" => {
             mode = ChatMode::DIRECT;
             false
@@ -260,45 +356,34 @@ fn receive_string_vec(stream: &mut TcpStream, buffer: &mut Vec<u8>) -> Option<Ve
     }
 }
 
-fn get_user() -> LoginRequest {
-    let input = get_user_input(String::from("user name:"));
-    LoginRequest{name: input.read_string}
+fn get_user(term: &Arc<Mutex<AppTerm>>) -> LoginRequest {
+    // let input = get_user_input(String::from("user name:"));
+    let input = read_line(term, "user name:");
+    LoginRequest{name: input}
 }
 
-fn send_request(user: LoginRequest, stream: &mut TcpStream) {
+fn read_line(arc_term: &Arc<Mutex<AppTerm>>, prompt_text: &str) -> String {
+    let term = arc_term.lock().unwrap();
+    let read = term.console.read_line_initial_text(prompt_text).unwrap();
+    term.console.clear_line().unwrap();
+    read
+}
+
+fn send_request(user: LoginRequest, stream: &mut TcpStream, term: &Arc<Mutex<AppTerm>>) {
     let serialized = user.to_bytes();
     match stream.write(&serialized){
-        Ok(size) => println!("wrote {} bytes", size),
-        Err(e) => println!("failed to transmit user name: {}", e)
+        Ok(size) => write_sys_message(term, &format!("wrote {} bytes", size)),
+        Err(e) => write_err_message(term, &format!("failed to transmit user name: {}", e))
     };
 }
 
-fn close_connection(connection: &mut TcpStream) {
+fn close_connection(connection: &mut TcpStream, term: &Arc<Mutex<AppTerm>>) {
     match connection.shutdown(Shutdown::Both) {
         Ok(_) => {
-            println!("client terminated");
+            write_sys_message(term, &format!("connection with {} terminated", connection.peer_addr().unwrap()));
         },
         Err(e) => {
-            println!("failed to properly close connection to server: {}", e);
+            write_err_message(term, &format!("failed to properly close connection to server: {}", e));
         }
     }
-}
-
-fn get_user_input(prompt_text: String) -> Input {
-    print!("{}", prompt_text);
-    std::io::stdout().flush().unwrap();
-    let input_data = read_line_vector();
-    let input_string = from_utf8(&input_data).unwrap().to_string();
-    let input_length = input_string.len();
-    Input{user_input: input_data, read_string: input_string, length: input_length}
-}
-
-fn read_line_vector() -> Vec<u8> {
-    let mut input = Vec::new();
-    std::io::stdin().lock().read_until(0xA, &mut input).unwrap();
-    // remove (windows?) line break
-    if input.len() >= 2 {
-        input.truncate(input.len() - 2);
-    }
-    input
 }

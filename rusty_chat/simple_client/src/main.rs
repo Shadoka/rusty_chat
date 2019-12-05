@@ -1,6 +1,5 @@
 use std::net::{TcpListener, TcpStream, Shutdown};
-use std::io::{Read, Write, BufRead};
-use std::str::from_utf8;
+use std::io::{Read, Write};
 use std::thread;
 use std::sync::{Arc, Mutex};
 use common::{LoginRequest, ChatRoom, ChatMode, User, MasterSelectionResult, Message};
@@ -79,20 +78,37 @@ fn direct_mode(stream: &mut TcpStream, term: Arc<Mutex<AppTerm>>) {
     if master_selection.is_own_ip {
         start_direct_server(chat_partner, term);
     } else {
-        // TODO: open connection in new thread & start writing
+        connect_to_master(master_selection.target_ip, chat_partner, term);
+    }
+}
+
+fn connect_to_master(master_ip: String, chat_partner: String, term: Arc<Mutex<AppTerm>>) {
+    match TcpStream::connect(&master_ip) {
+        Ok(mut stream) => {
+            let (snd, rcv): (Sender<InternMessage>, Receiver<InternMessage>) = crossbeam_channel::unbounded();
+            let term_clone = term.clone();
+            thread::spawn(move || {
+                prepare_print_loop_simple(rcv, chat_partner, term_clone)
+            });
+            user_input_loop(snd, &mut stream, &term);
+        },
+        Err(e) => {
+            write_err_message(&term, format!("failed to connect: {}", e).as_str())
+        }
     }
 }
 
 fn start_direct_server(chat_partner: String, term: Arc<Mutex<AppTerm>>) {
     let (snd, rcv): (Sender<InternMessage>, Receiver<InternMessage>) = crossbeam_channel::unbounded();
     let term_clone = term.clone();
+    let partner_clone = chat_partner.clone();
     thread::spawn(move || {
-        print_messages_to_ui(rcv, chat_partner, term_clone)
+        prepare_print_loop_master(rcv, partner_clone, term_clone)
     });
-    master_server_direct(snd, &term);
+    master_server_direct(snd, chat_partner, &term);
 }
 
-fn master_server_direct(sender: Sender<InternMessage>, term: &Arc<Mutex<AppTerm>>) {
+fn master_server_direct(sender: Sender<InternMessage>, chat_partner: String, term: &Arc<Mutex<AppTerm>>) {
     let listener = TcpListener::bind("0.0.0.0:3334").unwrap();
     // TODO: do i really wait for multiple connections here?
     for stream in listener.incoming() {
@@ -106,8 +122,9 @@ fn master_server_direct(sender: Sender<InternMessage>, term: &Arc<Mutex<AppTerm>
                 sender.send(message).unwrap();
 
                 let mut read_stream = stream.try_clone().unwrap();
+                let partner_clone = chat_partner.clone();
                 thread::spawn(move || {
-                    read_incoming_messages(reader_clone, &mut read_stream)
+                    read_incoming_messages(reader_clone, &mut read_stream, partner_clone)
                 });
 
                 let mut write_stream = stream.try_clone().unwrap();
@@ -176,7 +193,7 @@ fn send_message(msg: Message, stream: &mut TcpStream) {
     stream.write(&serialized).expect("catastrophic failure");
 }
 
-fn read_incoming_messages(sender: Sender<InternMessage>, stream: &mut TcpStream) {
+fn read_incoming_messages(sender: Sender<InternMessage>, stream: &mut TcpStream, chat_partner: String) {
     let mut buffer = vec!(0; Message::SIZE);
     while match stream.read(&mut buffer) {
         Ok(size) => {
@@ -186,8 +203,7 @@ fn read_incoming_messages(sender: Sender<InternMessage>, stream: &mut TcpStream)
                 continue_reading = false;
             } else {
                 let msg = deserialize_message(&buffer);
-                // TODO: yo i need that name
-                let info = MessageInfo{message: msg.message, message_writer: String::from("other")};
+                let info = MessageInfo{message: msg.message, message_writer: chat_partner.clone()};
                 sender.send(InternMessage::ChatMessage(info)).unwrap();
             }
             continue_reading
@@ -203,7 +219,12 @@ fn deserialize_message(buffer: &[u8]) -> Message {
     bincode::deserialize(buffer).unwrap()
 }
 
-fn print_messages_to_ui(receiver: Receiver<InternMessage>, chat_partner: String, term: Arc<Mutex<AppTerm>>) {
+fn prepare_print_loop_simple(receiver: Receiver<InternMessage>, chat_partner: String, term: Arc<Mutex<AppTerm>>) {
+    write_sys_message(&term, &format!("connected to {}!", chat_partner));
+    print_messages_to_ui(receiver, term);
+}
+
+fn prepare_print_loop_master(receiver: Receiver<InternMessage>, chat_partner: String, term: Arc<Mutex<AppTerm>>) {
     write_sys_message(&term, "waiting for chat partner to connect...");
     let con_success = match receiver.recv() {
         Ok(msg) => {
@@ -222,6 +243,10 @@ fn print_messages_to_ui(receiver: Receiver<InternMessage>, chat_partner: String,
         write_sys_message(&term, &format!("{} connected successfully!", chat_partner));
     }
 
+    print_messages_to_ui(receiver, term);
+}
+
+fn print_messages_to_ui(receiver: Receiver<InternMessage>, term: Arc<Mutex<AppTerm>>) {
     while match receiver.recv() {
         Ok(message) => {
             let mut continue_loop = false;
@@ -276,8 +301,8 @@ fn choose_room(stream: &mut TcpStream) {
 fn send_string(name: String, stream: &mut TcpStream, term: &Arc<Mutex<AppTerm>>) {
     let serialized_name = bincode::serialize(&name).unwrap();
     match stream.write(&serialized_name) {
-        Ok(size) => write_sys_message(term, &format!("room name transmitted, wrote {} bytes", size)),
-        Err(e) => write_err_message(term, &format!("error transmitting the room name: {}", e))
+        Ok(size) => write_sys_message(term, &format!("string transmitted, wrote {} bytes", size)),
+        Err(e) => write_err_message(term, &format!("error transmitting the string: {}", e))
     }
 }
 
@@ -316,7 +341,10 @@ fn get_chat_mode(term: &Arc<Mutex<AppTerm>>) -> ChatMode {
             mode = ChatMode::ROOM;
             false
         },
-        _ => true
+        x => {
+            write_err_message(term, x);
+            true
+        }
     } {}
     mode
 }
@@ -364,9 +392,10 @@ fn get_user(term: &Arc<Mutex<AppTerm>>) -> LoginRequest {
 
 fn read_line(arc_term: &Arc<Mutex<AppTerm>>, prompt_text: &str) -> String {
     let term = arc_term.lock().unwrap();
-    let read = term.console.read_line_initial_text(prompt_text).unwrap();
+    let mut read = term.console.read_line_initial_text(prompt_text).unwrap();
+    let input = read.split_off(prompt_text.len());
     term.console.clear_line().unwrap();
-    read
+    input
 }
 
 fn send_request(user: LoginRequest, stream: &mut TcpStream, term: &Arc<Mutex<AppTerm>>) {

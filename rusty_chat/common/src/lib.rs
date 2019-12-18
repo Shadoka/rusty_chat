@@ -1,5 +1,6 @@
 extern crate bincode;
 extern crate serde;
+extern crate crossbeam_channel;
 #[macro_use] extern crate serde_derive;
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
@@ -30,11 +31,22 @@ impl Message {
 pub struct User {
     pub id: u8,
     pub name: String,
-    pub ip_address: String
+    pub ip_address: String,
+    pub sender: Option<crossbeam_channel::Sender<MasterSelectionResult>>
 }
 
 impl User {
     pub const NAME_SIZE: usize = 256;
+
+    pub fn get_sender(&self) -> Option<crossbeam_channel::Sender<MasterSelectionResult>> {
+        match &self.sender {
+            Some(snd) => {
+                let s = snd.clone();
+                Some(s)
+            },
+            None => None
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]

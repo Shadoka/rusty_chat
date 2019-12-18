@@ -9,5 +9,5 @@ edition = "2018"
 [dependencies]
 common = {path = "../common"}
 bincode = "*"
-crossbeam = "*"
+crossbeam-channel = "*"
 rand = "*"

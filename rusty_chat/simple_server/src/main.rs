@@ -3,11 +3,14 @@ use std::time;
 use std::sync::{Arc, Mutex};
 use std::net::{TcpListener, TcpStream, Shutdown};
 use std::io::{Read, Write};
+use crossbeam_channel as channel;
+use crossbeam_channel::{Sender, Receiver};
 use common::{LoginRequest, ChatRoom, User, ChatMode, MasterSelectionResult};
 use rand::{thread_rng, Rng};
 
 extern crate bincode;
 extern crate rand;
+extern crate crossbeam_channel;
 
 // TODO: receiving 0 bytes in any receive* method means the client quit on us -> do something sensible
 // TODO: find logging crate
@@ -48,6 +51,16 @@ fn handle_client(mut stream: TcpStream, rooms: Arc<Mutex<Vec<ChatRoom>>>, users:
         None => create_and_add_user(String::from("anon"), stream.local_addr().unwrap().to_string(), &users)
     };
 
+    let (sender, receiver) = channel::unbounded();
+	attach_sender_to_user(&users, user_id, sender);
+    
+    thread::spawn({
+        let listen_stream_clone = stream.try_clone().unwrap();
+		move || {
+			listen_on_channel(receiver, listen_stream_clone);
+		}
+	});
+
     while match receive_chat_mode(&mut stream) {
         Some(m) => {
             if m == ChatMode::DIRECT {
@@ -62,6 +75,36 @@ fn handle_client(mut stream: TcpStream, rooms: Arc<Mutex<Vec<ChatRoom>>>, users:
             false
         }
     } {}
+
+    // TODO: disconnect impending, clear data
+}
+
+// TODO: https://stackoverflow.com/questions/26126683/how-to-match-trait-implementors
+// TODO: Need to work in a chat request for example, probably close request too
+fn listen_on_channel(receiver: Receiver<MasterSelectionResult>, mut stream: TcpStream) {
+	while match receiver.recv() {
+		Ok(selection) => {
+			send_master_selection(&selection, &mut stream);
+			false
+		},
+		Err(e) => {
+			println!("error receiving master selection on channel: {}", e);
+			false
+		}
+	} {}
+}
+
+fn send_master_selection(selection: &MasterSelectionResult, stream: &mut TcpStream) {
+	let serialized = bincode::serialize(selection).unwrap();
+	stream.write(&serialized).unwrap();
+}
+
+fn attach_sender_to_user(users: &Arc<Mutex<Vec<User>>>, id: u8, sender: Sender<MasterSelectionResult>) {
+	let mut user_vec = users.lock().unwrap();
+	match user_vec.iter_mut().find(|u| u.id == id) {
+		Some(user) => user.sender = Some(sender),
+		None => ()
+	}
 }
 
 fn direct_mode(stream: &mut TcpStream, users: &Arc<Mutex<Vec<User>>>, own_user_id: u8) -> bool {
@@ -87,28 +130,48 @@ fn direct_mode(stream: &mut TcpStream, users: &Arc<Mutex<Vec<User>>>, own_user_i
     }
     println!("{} wants to chat with {}", own_name, other_name);
     
+    let other_id = get_id_by_name(&other_name, &users).unwrap();
     let mut ids = Vec::new();
     ids.push(own_user_id);
-    ids.push(get_id_by_name(&other_name, &users).unwrap());
+    ids.push(other_id);
     let master_id = choose_master(ids);
     let master_ip = get_address_by_id(own_user_id, &users).unwrap();
-    
-    // TODO: send info to other client thread
 
+    println!("master_id: {}, master_ip={}", master_id, &master_ip);
+
+    let other_sender = get_sender_by_id(&users, other_id).expect("cannot communicate with other client");
+	let mut other_selection_result = MasterSelectionResult{target_ip: master_ip.clone(), is_own_ip: false};
+	if master_id == other_id {
+		other_selection_result.is_own_ip = true;
+	}
+    other_sender.send(other_selection_result).unwrap();
+    
+    println!("result sent to other party");
+    
     let mut selection_result = MasterSelectionResult{target_ip: master_ip, is_own_ip: false};
     if master_id == own_user_id {
         selection_result.is_own_ip = true;
     }
 
-    // TODO: send info to client and prepare to disconnect (ie. remove client from user list)
+    send_master_selection(&selection_result, stream);
 
-    true
+    false
 }
 
 fn get_address_by_id(id: u8, users: &Arc<Mutex<Vec<User>>>) -> Option<String> {
     let user_vec = users.lock().unwrap();
     match user_vec.iter().find(|u| u.id == id) {
         Some(user) => Some(user.ip_address.clone()),
+        None => None
+    }
+}
+
+fn get_sender_by_id(users: &Arc<Mutex<Vec<User>>>, id: u8) -> Option<Sender<MasterSelectionResult>> {
+    let user_vec = users.lock().unwrap();
+    match user_vec.iter().find(|u| u.id == id) {
+        Some(user) =>  {
+            user.get_sender()
+        },
         None => None
     }
 }
@@ -158,7 +221,7 @@ fn get_name_by_id(id: u8, users: &Arc<Mutex<Vec<User>>>) -> Option<String> {
 fn create_and_add_user(user_name: String, ip_address: String, users: &Arc<Mutex<Vec<User>>>) -> u8 {
     let mut user_vec = users.lock().unwrap();
     let user_id = user_vec.len() as u8;
-    let user = User{id: user_id, name: user_name, ip_address: ip_address};
+    let user = User{id: user_id, name: user_name, ip_address: ip_address, sender: None};
     user_vec.push(user);
     user_id
 }

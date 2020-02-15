@@ -50,9 +50,16 @@ impl User {
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
+pub enum RemoteMessage {
+    ChatModeMessage(ChatMode),
+    LoginMessage(LoginRequest)
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub enum ChatMode {
     DIRECT,
-    ROOM
+    ROOM,
+    WAIT
 }
 
 impl ChatMode {
@@ -75,6 +82,7 @@ impl ChatRoom {
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 pub struct MasterSelectionResult {
+    pub chat_partner_name: String,
     pub target_ip: String,
     pub is_own_ip: bool
 }

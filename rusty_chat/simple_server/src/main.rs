@@ -47,14 +47,14 @@ fn main() {
 fn handle_client(mut stream: TcpStream, rooms: Arc<Mutex<Vec<ChatRoom>>>, users: Arc<Mutex<Vec<User>>>) {
     let request = receive_login_request(&mut stream);
     let user_id = match request {
-        Some(r) => create_and_add_user(r.name, stream.local_addr().unwrap().to_string(), &users),
+        Some(r) => create_and_add_user(r.name, stream.peer_addr().unwrap().ip().to_string(), &users),
         None => create_and_add_user(String::from("anon"), stream.local_addr().unwrap().to_string(), &users)
     };
 
     let (sender, receiver) = channel::unbounded();
 	attach_sender_to_user(&users, user_id, sender);
     
-    thread::spawn({
+    let receiver_thread = thread::spawn({
         let listen_stream_clone = stream.try_clone().unwrap();
 		move || {
 			listen_on_channel(receiver, listen_stream_clone);
@@ -65,6 +65,8 @@ fn handle_client(mut stream: TcpStream, rooms: Arc<Mutex<Vec<ChatRoom>>>, users:
         Some(m) => {
             if m == ChatMode::DIRECT {
                 direct_mode(&mut stream, &users, user_id)
+            } else if m == ChatMode::WAIT {
+                false
             } else {
                 room_mode(&mut stream, &rooms)
             }
@@ -76,7 +78,9 @@ fn handle_client(mut stream: TcpStream, rooms: Arc<Mutex<Vec<ChatRoom>>>, users:
         }
     } {}
 
+    receiver_thread.join().unwrap();
     // TODO: disconnect impending, clear data
+    println!("terminating connection with {}", stream.peer_addr().unwrap().to_string());
 }
 
 // TODO: https://stackoverflow.com/questions/26126683/how-to-match-trait-implementors
@@ -140,7 +144,7 @@ fn direct_mode(stream: &mut TcpStream, users: &Arc<Mutex<Vec<User>>>, own_user_i
     println!("master_id: {}, master_ip={}", master_id, &master_ip);
 
     let other_sender = get_sender_by_id(&users, other_id).expect("cannot communicate with other client");
-	let mut other_selection_result = MasterSelectionResult{target_ip: master_ip.clone(), is_own_ip: false};
+	let mut other_selection_result = MasterSelectionResult{chat_partner_name: own_name, target_ip: master_ip.clone(), is_own_ip: false};
 	if master_id == other_id {
 		other_selection_result.is_own_ip = true;
 	}
@@ -148,12 +152,14 @@ fn direct_mode(stream: &mut TcpStream, users: &Arc<Mutex<Vec<User>>>, own_user_i
     
     println!("result sent to other party");
     
-    let mut selection_result = MasterSelectionResult{target_ip: master_ip, is_own_ip: false};
+    let mut selection_result = MasterSelectionResult{chat_partner_name: other_name, target_ip: master_ip, is_own_ip: false};
     if master_id == own_user_id {
         selection_result.is_own_ip = true;
     }
 
-    send_master_selection(&selection_result, stream);
+    // it's neccessary to go via the channel to terminate our own receiver thread
+    let own_sender = get_sender_by_id(&users, own_user_id).expect("cant obtain own sender channel");
+    own_sender.send(selection_result).unwrap();
 
     false
 }

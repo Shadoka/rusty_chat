@@ -11,4 +11,5 @@ edition = "2018"
 common = {path = "../common"}
 bincode = "*"
 crossbeam-channel = "*"
-console = "*"
+# console = {path = "C:\\workspace_console\\console"}
+console = "0.10.0"

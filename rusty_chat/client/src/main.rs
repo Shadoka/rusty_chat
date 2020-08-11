@@ -139,9 +139,9 @@ fn connect_to_master(master_ip: String, chat_partner: String, term: ui::UI, snd:
 fn start_master_server_direct(sender: Sender<InternMessage>, chat_partner: String, term: ui::UI) {
     let listener = TcpListener::bind("0.0.0.0:3334").unwrap();
     // TODO: do i really wait for multiple connections here?
-    for stream in listener.incoming() {
-        match stream {
-            Ok(stream) => {
+    //for stream in listener.incoming() {
+        match listener.accept() {
+            Ok((stream, _)) => {
                 term.update_title(&chat_partner);
 
                 sys_message!(&format!("{} connected successfully", &chat_partner) => sender);
@@ -150,11 +150,14 @@ fn start_master_server_direct(sender: Sender<InternMessage>, chat_partner: Strin
 
                 let mut write_stream = stream.try_clone().unwrap();
                 let input_clone = sender.clone();
+                // TODO: user_input_loop all the way, give means to get input
+                // then join on network thread
+                // then restart (whole?) flow
                 user_input_loop(input_clone, &mut write_stream, &term);
             },
             Err(e) => err_message!(&format!("Error: {}", e) => sender)
         }
-    }
+    //}
 }
 
 /// Spins up a thread which listens on incoming messages.
@@ -180,7 +183,8 @@ fn user_input_loop(sender: Sender<InternMessage>, stream: &mut TcpStream, term: 
                 continue_chat = false;
             } else {
                 let message_to_send = Message{message: input.clone()};
-                send_message(message_to_send, stream);
+                // TODO: how can we query whether or not the other client terminated the connection?
+                send_message(message_to_send, stream, &sender);
 
                 chat_message!(String::from("me"), input => sender);
             }
@@ -214,9 +218,21 @@ fn read_incoming_messages(sender: Sender<InternMessage>, stream: &mut TcpStream,
     } {}
 }
 
-fn send_message(msg: Message, stream: &mut TcpStream) {
+/// Sends a message to a chat partner
+/// msg: Message to send
+/// stream: Connection to a chat partner
+/// snd: Possibly needed to print an error to the UI
+fn send_message(msg: Message, stream: &mut TcpStream, snd: &Sender<InternMessage>) {
     let serialized = bincode::serialize(&msg).unwrap();
-    stream.write(&serialized).expect("catastrophic failure");
+    match stream.write(&serialized) {
+        Ok(_) => {},
+        Err(_) => {
+            // Client crashed or terminated connection.
+            // We should be able to discern that, for now just log it
+            // TODO: Logging
+            err_message!("chat partner terminated connection or crashed" => snd);
+        }
+    }
 }
 
 fn deserialize_message(buffer: &[u8]) -> Message {
@@ -242,7 +258,7 @@ fn print_messages_to_ui(receiver: Receiver<InternMessage>, mut term: ui::UI) {
                 InternMessage::SystemMessage(text) => {
                     if &text == "/terminated" {
                         term.write_sys_message("connection with your chat partner was terminated");
-                        continue_loop = false
+                        continue_loop = true
                     } else {
                         term.write_sys_message(&text);
                         continue_loop = true
@@ -371,7 +387,7 @@ fn send_request(user: LoginRequest, stream: &mut TcpStream, snd: &Sender<InternM
 fn close_connection(connection: &mut TcpStream, snd: &Sender<InternMessage>) {
     match connection.shutdown(Shutdown::Both) {
         Ok(_) => {
-            sys_message!(&format!("connection with {} terminated", connection.peer_addr().unwrap()) => snd);
+            sys_message!("connection with peer terminated" => snd);
         },
         Err(e) => {
             err_message!(&format!("failed to properly close connection to server: {}", e) => snd);

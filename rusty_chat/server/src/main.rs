@@ -79,7 +79,8 @@ fn handle_client(mut stream: TcpStream, rooms: Arc<Mutex<Vec<ChatRoom>>>, users:
     } {}
 
     receiver_thread.join().unwrap();
-    // TODO: disconnect impending, clear data
+    
+    remove_user(user_id, &users);
     println!("terminating connection with {}", stream.peer_addr().unwrap().to_string());
 }
 
@@ -209,8 +210,6 @@ fn room_mode(stream: &mut TcpStream, rooms: &Arc<Mutex<Vec<ChatRoom>>>) -> bool 
     true
 }
 
-// i need a fn for this, dont i?
-// as i understand it, i hold the lock for the duration of the scope i called lock() in
 fn check_for_users(users: &Arc<Mutex<Vec<User>>>) -> bool {
     let user_vec = users.lock().unwrap();
     user_vec.len() <= 1
@@ -222,6 +221,16 @@ fn get_name_by_id(id: u8, users: &Arc<Mutex<Vec<User>>>) -> Option<String> {
         Some(user) => Some(user.name.clone()),
         None => None
     }
+}
+
+fn remove_user(id: u8, users: &Arc<Mutex<Vec<User>>>) -> Option<User> {
+    let mut user_vec = users.lock().unwrap();
+    for i in 0..user_vec.len() {
+        if user_vec[i].id == id {
+            return Some(user_vec.swap_remove(i))
+        }
+    }
+    None
 }
 
 fn create_and_add_user(user_name: String, ip_address: String, users: &Arc<Mutex<Vec<User>>>) -> u8 {

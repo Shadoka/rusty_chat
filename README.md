@@ -27,7 +27,7 @@ A loooooooooot! Here is an assorted collection:
  - group chat
  - encrypted communication
  - hole punching
- - i _could_ think about file transfer atleast in bidirectional chat
+ - I _could_ think about file transfer atleast in bidirectional chat
 
 # How to run it
 

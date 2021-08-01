@@ -13,7 +13,7 @@ Clients find each other via discovery server. When two parties want to chat with
 
 # Known issues
 
-A loooooooooot! Here is an assorted collection:
+A looooooooot! Here is an assorted collection:
 
  - Currently the first client to connect to the discovery server has to go in a temporary 'wait mode'. That needs to go.
  - Discovery server is hardcoded to be local.

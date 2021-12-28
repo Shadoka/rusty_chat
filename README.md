@@ -1,6 +1,7 @@
 # Rusty Chat
 
 Rusty Chat aims to be a (relatively) decentralized chatting tool to be used via command line.
+
 It has three parts:
 
  1. server[executable]: Used as discovery server. New clients connect to a server of their choice and can get into contact with other clients.
